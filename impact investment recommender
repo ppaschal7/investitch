@@ -1,0 +1,96 @@
+import numpy as np
+import pandas as pd
+from sklearn import ensemble
+from typing import Dict, List, Any
+from dataclasses import dataclass
+from enum import Enum, auto
+
+class ImpactCategory(Enum):
+    ENVIRONMENTAL = auto()
+    SOCIAL = auto()
+    GOVERNANCE = auto()
+
+@dataclass
+class InvestmentCriteria:
+    """Defines investment preferences and constraints"""
+    risk_tolerance: float  # 0-1 scale
+    investment_horizon: int  # years
+    impact_focus: List[ImpactCategory]
+    minimum_return: float
+    max_investment_amount: float
+    excluded_sectors: List[str]
+
+class ImpactDataProcessor:
+    """Processes and cleans impact investment data"""
+    @staticmethod
+    def normalize_data(data: pd.DataFrame) -> pd.DataFrame:
+        """Normalize investment data using min-max scaling"""
+        return (data - data.min()) / (data.max() - data.min())
+    
+    @staticmethod
+    def calculate_impact_score(investment_data: Dict) -> float:
+        """Calculate comprehensive impact score"""
+        esg_metrics = ['carbon_reduction', 'social_impact', 'governance_score']
+        return np.mean([investment_data.get(metric, 0) for metric in esg_metrics])
+
+class AIRecommendationEngine:
+    def __init__(self,
+                 data_processor: ImpactDataProcessor,
+                 ml_model: Any = None):
+        """Initialize recommendation engine with data processor and ML model"""
+        self.data_processor = data_processor
+        self.ml_model = ml_model or ensemble.RandomForestRegressor()
+        self.return_model = None
+        self.impact_model = None
+    
+    def train_model(self, historical_data: pd.DataFrame):
+        """Train machine learning model on historical investment performance"""
+        normalized_data = self.data_processor.normalize_data(historical_data)
+        X = normalized_data.drop(['return_rate', 'impact_score'], axis=1)
+        y_return = normalized_data['return_rate']
+        y_impact = normalized_data['impact_score']
+        
+        self.return_model = ensemble.clone(self.ml_model)
+        self.impact_model = ensemble.clone(self.ml_model)
+        
+        self.return_model.fit(X, y_return)
+        self.impact_model.fit(X, y_impact)
+    
+    def generate_recommendations(
+        self,
+        investment_criteria: InvestmentCriteria,
+        available_investments: pd.DataFrame
+    ) -> List[Dict]:
+        """Generate personalized investment recommendations"""
+        if self.return_model is None or self.impact_model is None:
+            raise ValueError("Models must be trained before generating recommendations")
+        
+        processed_investments = self.data_processor.normalize_data(available_investments)
+        
+        recommendations = []
+        for _, investment in processed_investments.iterrows():
+            # Predict return and impact scores
+            predicted_return = self.return_model.predict([investment])[0]
+            predicted_impact = self.impact_model.predict([investment])[0]
+            
+            # Filter based on investment criteria
+            meets_criteria = all([
+                predicted_return >= investment_criteria.minimum_return,
+                investment['sector'] not in investment_criteria.excluded_sectors,
+                any(category.name.lower() in investment.keys()
+                    for category in investment_criteria.impact_focus)
+            ])
+            
+            if meets_criteria:
+                recommendations.append({
+                    'investment_name': investment['name'],
+                    'predicted_return': predicted_return,
+                    'impact_score': predicted_impact,
+                    'alignment_score': np.mean([predicted_return, predicted_impact])
+                })
+        
+        # Sort recommendations by alignment score
+        return sorted(recommendations,
+                      key=lambda x: x['alignment_score'],
+                      reverse=True)
+
