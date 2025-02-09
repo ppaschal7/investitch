@@ -1,0 +1,230 @@
+import numpy as np
+import pandas as pd
+from sklearn import ensemble, model_selection, preprocessing
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.metrics import mean_squared_error, r2_score
+from typing import Dict, List, Any, Optional, Tuple
+from dataclasses import dataclass, field
+from enum import Enum, auto
+import logging
+
+# Enhanced Logging Configuration
+logging.basicConfig(level=logging.INFO, 
+                    format='%(asctime)s - %(levelname)s: %(message)s')
+logger = logging.getLogger(__name__)
+
+class ImpactCategory(Enum):
+    ENVIRONMENTAL = auto()
+    SOCIAL = auto()
+    GOVERNANCE = auto()
+
+@dataclass
+class InvestmentCriteria:
+    """Enhanced investment preferences with more granular constraints"""
+    risk_tolerance: float = 0.5  # Default moderate risk
+    investment_horizon: int = 5  # Default 5-year horizon
+    impact_focus: List[ImpactCategory] = field(default_factory=list)
+    minimum_return: float = 0.05  # 5% minimum return
+    max_investment_amount: float = float('inf')
+    excluded_sectors: List[str] = field(default_factory=list)
+    max_volatility: Optional[float] = None
+    min_impact_score: float = 0.6  # Minimum impact threshold
+
+class AdvancedDataProcessor:
+    """Enhanced data processing with robust cleaning and transformation"""
+    @staticmethod
+    def clean_data(data: pd.DataFrame) -> pd.DataFrame:
+        """Comprehensive data cleaning"""
+        # Remove duplicates
+        data = data.drop_duplicates()
+        
+        # Handle missing values
+        numeric_columns = data.select_dtypes(include=[np.number]).columns
+        categorical_columns = data.select_dtypes(include=['object']).columns
+        
+        # Impute numeric columns with median
+        for col in numeric_columns:
+            data[col] = data[col].fillna(data[col].median())
+        
+        # Impute categorical columns with mode
+        for col in categorical_columns:
+            data[col] = data[col].fillna(data[col].mode()[0])
+        
+        return data
+    
+    @staticmethod
+    def feature_engineering(data: pd.DataFrame) -> pd.DataFrame:
+        """Create derived features for more nuanced analysis"""
+        # Example feature engineering
+        data['volatility'] = data.groupby('sector')['return_rate'].transform('std')
+        data['sector_avg_return'] = data.groupby('sector')['return_rate'].transform('mean')
+        data['impact_momentum'] = data.groupby('sector')['impact_score'].transform(lambda x: x.diff().rolling(window=3).mean())
+        
+        return data
+    
+    @staticmethod
+    def normalize_data(data: pd.DataFrame) -> pd.DataFrame:
+        """Advanced normalization with robust scaling"""
+        # Use RobustScaler to handle outliers
+        scaler = preprocessing.RobustScaler()
+        columns_to_scale = data.select_dtypes(include=[np.number]).columns
+        data[columns_to_scale] = scaler.fit_transform(data[columns_to_scale])
+        return data
+
+class AdvancedRecommendationEngine:
+    def __init__(self, data_processor: AdvancedDataProcessor):
+        """Initialize with advanced model setup"""
+        self.data_processor = data_processor
+        self.return_model = None
+        self.impact_model = None
+        self.feature_columns = None
+    
+    def prepare_model_pipeline(self) -> Pipeline:
+        """Create a robust machine learning pipeline"""
+        # Preprocessing steps
+        numeric_features = ['sector_avg_return', 'volatility', 'impact_momentum']
+        categorical_features = ['sector']
+        
+        # Preprocessing for numerical and categorical data
+        preprocessor = ColumnTransformer(
+            transformers=[
+                ('num', Pipeline([
+                    ('imputer', SimpleImputer(strategy='median')),
+                    ('scaler', preprocessing.StandardScaler())
+                ]), numeric_features),
+                ('cat', Pipeline([
+                    ('imputer', SimpleImputer(strategy='constant', fill_value='missing')),
+                    ('onehot', preprocessing.OneHotEncoder(handle_unknown='ignore'))
+                ]), categorical_features)
+            ])
+        
+        # Create pipeline with preprocessing and model
+        pipeline = Pipeline([
+            ('preprocessor', preprocessor),
+            ('regressor', ensemble.RandomForestRegressor(
+                n_estimators=100, 
+                random_state=42, 
+                max_depth=10
+            ))
+        ])
+        
+        return pipeline
+    
+    def train_model(self, historical_data: pd.DataFrame) -> Dict[str, float]:
+        """Advanced model training with cross-validation"""
+        # Clean and engineer features
+        cleaned_data = self.data_processor.clean_data(historical_data)
+        featured_data = self.data_processor.feature_engineering(cleaned_data)
+        
+        # Separate features and targets
+        X = featured_data.drop(['return_rate', 'impact_score'], axis=1)
+        y_return = featured_data['return_rate']
+        y_impact = featured_data['impact_score']
+        
+        self.feature_columns = X.columns.tolist()
+        
+        # Perform cross-validation for return prediction
+        return_pipeline = self.prepare_model_pipeline()
+        return_scores = model_selection.cross_val_score(
+            return_pipeline, X, y_return, 
+            cv=5, scoring='neg_mean_squared_error'
+        )
+        
+        # Train final models
+        self.return_model = return_pipeline.fit(X, y_return)
+        
+        # Log performance metrics
+        performance_metrics = {
+            'return_model_mse': -return_scores.mean(),
+            'return_model_std': return_scores.std()
+        }
+        logger.info(f"Model Training Performance: {performance_metrics}")
+        
+        return performance_metrics
+    
+    def generate_recommendations(
+        self, 
+        investment_criteria: InvestmentCriteria, 
+        available_investments: pd.DataFrame
+    ) -> List[Dict]:
+        """Advanced recommendation generation"""
+        if self.return_model is None:
+            raise ValueError("Models must be trained before generating recommendations")
+        
+        # Preprocess investments
+        processed_investments = self.data_processor.clean_data(available_investments)
+        processed_investments = self.data_processor.feature_engineering(processed_investments)
+        
+        # Prepare feature matrix
+        X_recommend = processed_investments[self.feature_columns]
+        
+        # Predict returns and apply filters
+        recommendations = []
+        for idx, investment in processed_investments.iterrows():
+            # Predict return
+            predicted_return = self.return_model.predict([X_recommend.loc[idx]])[0]
+            
+            # Apply investment criteria filters
+            meets_criteria = all([
+                predicted_return >= investment_criteria.minimum_return,
+                investment['sector'] not in investment_criteria.excluded_sectors,
+                investment.get('volatility', float('inf')) <= (investment_criteria.max_volatility or float('inf')),
+                any(category.name.lower() in str(investment).lower() 
+                    for category in investment_criteria.impact_focus)
+            ])
+            
+            if meets_criteria:
+                recommendations.append({
+                    'investment_name': investment['name'],
+                    'predicted_return': predicted_return,
+                    'sector': investment['sector'],
+                    'volatility': investment.get('volatility', 'N/A'),
+                    'recommendation_score': predicted_return * (1 - (investment.get('volatility', 0)))
+                })
+        
+        # Sort recommendations by recommendation score
+        return sorted(recommendations, key=lambda x: x['recommendation_score'], reverse=True)
+
+# Usage Example
+def main():
+    # Example data setup
+    data_processor = AdvancedDataProcessor()
+    recommendation_engine = AdvancedRecommendationEngine(data_processor)
+    
+    # Simulated historical investment data
+    historical_data = pd.DataFrame({
+        'return_rate': [0.07, 0.05, 0.09],
+        'impact_score': [0.7, 0.6, 0.8],
+        'sector': ['tech', 'energy', 'healthcare'],
+        'name': ['Tech Fund', 'Green Energy', 'Healthcare Impact']
+    })
+    
+    # Train model
+    recommendation_engine.train_model(historical_data)
+    
+    # Define investment criteria
+    investment_criteria = InvestmentCriteria(
+        risk_tolerance=0.6,
+        investment_horizon=7,
+        impact_focus=[ImpactCategory.ENVIRONMENTAL, ImpactCategory.SOCIAL],
+        minimum_return=0.06,
+        max_volatility=0.2
+    )
+    
+    # Generate recommendations
+    recommendations = recommendation_engine.generate_recommendations(
+        investment_criteria, 
+        historical_data
+    )
+    
+    print("Top Investment Recommendations:")
+    for rec in recommendations:
+        print(f"Investment: {rec['investment_name']}, "
+              f"Predicted Return: {rec['predicted_return']:.2%}, "
+              f"Recommendation Score: {rec['recommendation_score']:.4f}")
+
+if __name__ == '__main__':
+    main()
+
